@@ -7,18 +7,15 @@ import com.jiaruiblog.common.ConfigConstant;
 import com.jiaruiblog.common.MessageConstant;
 import com.jiaruiblog.config.SystemConfig;
 import com.jiaruiblog.entity.User;
+import com.jiaruiblog.entity.bo.UserBO;
 import com.jiaruiblog.entity.dto.*;
 import com.jiaruiblog.service.IUserService;
+import com.jiaruiblog.transformer.DTO2BO;
 import com.jiaruiblog.util.BaseApiResult;
 import com.jiaruiblog.util.JwtUtil;
-import com.mongodb.client.result.UpdateResult;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -45,16 +42,21 @@ import java.util.regex.Pattern;
 @RequestMapping("/user")
 public class UserController {
 
-    private static final String COLLECTION_NAME = "user";
-
     private static final String REQUEST_USER_ID = "id";
 
+    static final Map<String, String> fieldRegx = new HashMap<>(8);
+
+    static {
+        // 1-64个数字字母下划线
+        fieldRegx.put("password", "^[0-9a-z_]{1,64}$");
+        fieldRegx.put("phone", "/^1(3\\d|4[5-9]|5[0-35-9]|6[567]|7[0-8]|8\\d|9[0-35-9])\\d{8}$/");
+        fieldRegx.put("mail", "^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)+$");
+        // 1-140个任意字符
+        fieldRegx.put("description", "(.*){1,140}");
+    }
 
     @Resource
     IUserService userService;
-
-    @Resource
-    private MongoTemplate template;
 
     @Resource
     SystemConfig systemConfig;
@@ -69,49 +71,53 @@ public class UserController {
         return userService.registry(userDTO);
     }
 
-    @ApiOperation(value = "批量新增用户", notes = "批量新增用户")
+    @ApiOperation(value = "批量新增用户", notes = "批量新增用户; 支持使用xls进行导入用户信息")
     @PostMapping(value = "/batchInsert")
-    public BaseApiResult batchInsert(@RequestBody List<User> users) {
-        log.info("批量新增用户入参=={}", users.toString());
-        for (User item : users) {
-            template.save(item, COLLECTION_NAME);
+    public BaseApiResult batchInsert(@RequestBody List<RegistryUserDTO> userDTOS) {
+        for (RegistryUserDTO item : userDTOS) {
+            userService.registry(item);
         }
         return BaseApiResult.success("批量新增成功");
     }
 
     @ApiOperation(value = "根据id查询", notes = "批量新增用户")
     @PostMapping(value = "/getById")
-    public BaseApiResult getById(@RequestBody User user) {
-        Query query = new Query(Criteria.where("_id").is(user.getId()));
-        User one = template.findOne(query, User.class, COLLECTION_NAME);
+    public BaseApiResult getById(@RequestBody UserDTO user) {
+        User one = userService.queryById(user.getId());
+        // 增加对无效用户的判断
+        if (Objects.isNull(one)) {
+            return BaseApiResult.error(MessageConstant.PROCESS_ERROR_CODE, MessageConstant.DATA_IS_NULL);
+        }
         return BaseApiResult.success(one);
     }
 
     @ApiOperation(value = "根据用户名称查询", notes = "根据用户名称查询")
     @PostMapping(value = "/getByUsername")
-    public BaseApiResult getByUsername(@RequestBody User user) {
-        Query query = new Query(Criteria.where("username").is(user.getUsername()));
-        User one = template.findOne(query, User.class, COLLECTION_NAME);
+    public BaseApiResult getByUsername(@RequestBody RegistryUserDTO user) {
+        User one = userService.queryByUsername(user.getUsername());
         return BaseApiResult.success(one);
     }
 
+    /**
+     * @Author luojiarui
+     * @Description 仅限普通用户对自身的信息进行更新；不能更新其权限信息
+     * @Date 23:25 2024/7/26
+     * @Param [userDTO]
+     * @return com.jiaruiblog.util.BaseApiResult
+     **/
     @ApiOperation(value = "更新用户hobby和company", notes = "更新用户hobby和company")
     @PutMapping(value = "/updateUser")
-    public BaseApiResult updateUser(@RequestBody User user) {
-        Query query = new Query(Criteria.where("_id").is(user.getId()));
-        Update update = new Update();
-        if (StringUtils.hasText(user.getPassword())) {
-            update.set("password", user.getPassword());
+    public BaseApiResult updateUser(@RequestBody UserDTO userDTO) {
+        // 传入的参数数据不对，则返回参数不正确
+        if (checkUserDTOParams(userDTO)) {
+            return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
         }
-        update.set("phone", user.getPhone());
-        update.set("mail", user.getMail());
-        update.set("male", user.getMale());
-        update.set("description", user.getDescription());
-        update.set("updateDate", new Date());
-        update.set("birthtime", user.getBirthtime());
-        UpdateResult updateResult1 = template.updateFirst(query, update, User.class, COLLECTION_NAME);
-        if (updateResult1.getMatchedCount() > 0) {
-            return BaseApiResult.success("更新成功！");
+        // 检查修改参数信息
+        UserBO userBO = DTO2BO.userDTO2BO(userDTO);
+        // 个人用户对自己的信息进行更改
+        boolean result = userService.updateUserBySelf(userBO);
+        if (result) {
+            return BaseApiResult.success("更新成功!");
         }
         return BaseApiResult.error(MessageConstant.PROCESS_ERROR_CODE, MessageConstant.OPERATE_FAILED);
     }
@@ -126,7 +132,7 @@ public class UserController {
     @Permission(PermissionEnum.ADMIN)
     @ApiOperation(value = "根据id删除用户", notes = "根据id删除用户")
     @DeleteMapping(value = "/auth/deleteByID")
-    public BaseApiResult deleteById(@RequestBody User removeUser, HttpServletRequest request) {
+    public BaseApiResult deleteById(@RequestBody UserDTO removeUser, HttpServletRequest request) {
         String userId = (String) request.getAttribute(REQUEST_USER_ID);
         // 不能删除自己的账号
         String removeUserId = removeUser.getId();
@@ -245,54 +251,29 @@ public class UserController {
         return "当前用户信息id=" + id + ",userName=" + userName + ",password=" + password;
     }
 
-    static final Map<String, String> fieldRegx = new HashMap<>(8);
-
-    static {
-        // 1-64个数字字母下划线
-        fieldRegx.put("password", "^[0-9a-z_]{1,64}$");
-        fieldRegx.put("phone", "/^1(3\\d|4[5-9]|5[0-35-9]|6[567]|7[0-8]|8\\d|9[0-35-9])\\d{8}$/");
-        fieldRegx.put("mail", "^[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)+$");
-        // 1-140个任意字符
-        fieldRegx.put("description", "(.*){1,140}");
-    }
-
-
     /**
      * @return com.jiaruiblog.util.BaseApiResult
      * @Author luojiarui
-     * @Description 更新用户的基本信息
+     * @Description 更新用户的基本信息，只有管理员具有修改权限
      * @Date 13:07 2022/12/18
      * @Param [userDTO]
      **/
-    @PutMapping("updateUserInfo")
+    @Permission(PermissionEnum.ADMIN)
+    @PutMapping("/auth/updateUserInfo")
     public BaseApiResult updateUserInfo(@RequestBody UserDTO userDTO) {
-
-        if (StringUtils.hasText(userDTO.getPassword())) {
-            if (!patternMatch(userDTO.getPassword(), fieldRegx.get("password"))) {
-                return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
-            }
+        // 传入的参数数据不对，则返回参数不正确
+        if (checkUserDTOParams(userDTO)) {
+            return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
         }
-        if (StringUtils.hasText(userDTO.getMail())) {
-            if (!patternMatch(userDTO.getPassword(), fieldRegx.get("mail"))) {
-                return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
-            }
+        UserBO userBO = DTO2BO.userDTO2BO(userDTO);
+        boolean b = userService.updateUserByAdmin(userBO);
+        if (b) {
+            return BaseApiResult.success(MessageConstant.SUCCESS);
         }
-
-        if (StringUtils.hasText(userDTO.getPhone())) {
-            if (!patternMatch(userDTO.getPassword(), fieldRegx.get("phone"))) {
-                return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
-            }
-        }
-        if (StringUtils.hasText(userDTO.getDescription())) {
-            if (!patternMatch(userDTO.getPassword(), fieldRegx.get("description"))) {
-                return BaseApiResult.error(MessageConstant.PARAMS_ERROR_CODE, MessageConstant.PARAMS_FORMAT_ERROR);
-            }
-        }
-
-        return BaseApiResult.success();
+        return BaseApiResult.error(MessageConstant.PROCESS_ERROR_CODE, MessageConstant.OPERATE_FAILED);
     }
 
-
+    @ApiOperation(value = "上传用户的头像", notes = "上传当前登录用户的头像")
     @PostMapping("/auth/uploadUserAvatar")
     public BaseApiResult uploadUserAvatar(@RequestParam(value = "img") MultipartFile file, HttpServletRequest request) {
         String userId = (String) request.getAttribute("id");
@@ -304,13 +285,10 @@ public class UserController {
         return userService.uploadUserAvatar(userId, file);
     }
 
+    @ApiOperation(value = "删除用户头像", notes = "删除当前登录用户的头像")
     @DeleteMapping("/auth/removeUserAvatar")
     public BaseApiResult removeUserAvatar(HttpServletRequest request) {
         return userService.removeUserAvatar((String) request.getAttribute("id"));
-    }
-
-    private boolean patternMatch(String s, String regex) {
-        return Pattern.compile(regex).matcher(s).matches();
     }
 
     @ApiOperation(value = "重置用户密码", notes = "管理员对用户进行密码重置")
@@ -339,6 +317,35 @@ public class UserController {
         // 其次根据邮箱找到对应的用户信息，修改用户密码
         // 用户自动登录
         return BaseApiResult.success();
+    }
+
+    private static boolean patternMatch(String s, String regex) {
+        return !Pattern.compile(regex).matcher(s).matches();
+    }
+
+    /**
+     * @Author luojiarui
+     * @Description 检查用户更新的信息符合要求
+     * @Date 23:04 2024/7/23
+     * @Param [userDTO]
+     * @return boolean 符合要求返回true，不符合要求返回false
+     **/
+    public static boolean checkUserDTOParams(UserDTO userDTO) {
+        if (StringUtils.hasText(userDTO.getPassword())
+                && !patternMatch(userDTO.getPassword(), fieldRegx.get("password"))) {
+            return false;
+        }
+        if (StringUtils.hasText(userDTO.getMail())
+                && !patternMatch(userDTO.getMail(), fieldRegx.get("mail"))) {
+            return false;
+        }
+
+        if (StringUtils.hasText(userDTO.getPhone())
+                && !patternMatch(userDTO.getPhone(), fieldRegx.get("phone"))) {
+            return false;
+        }
+        return !(StringUtils.hasText(userDTO.getDescription())
+                && !patternMatch(userDTO.getDescription(), fieldRegx.get("description")));
     }
 
 }

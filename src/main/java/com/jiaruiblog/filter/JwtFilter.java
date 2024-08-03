@@ -23,19 +23,16 @@ import java.util.Map;
  * @version v2.0
  */
 @Slf4j
-@WebFilter(filterName = "JwtFilter", urlPatterns = {
-        "/comment/auth/*", "/user/auth/*", "/collect/auth/*", "/document/auth/*",
-        "/docReview/*", "/docLog/*", "/like/*", "/files/auth/*", "/category/auth/*"
-})
+@WebFilter(filterName = "JwtFilter", urlPatterns = {"/*"})
 public class JwtFilter implements Filter
 {
 
     private static final String OPTIONS = "OPTIONS";
 
     /**
-     * 安全的url，不需要令牌
+     * 安全的url，不需要令牌; 游客可以访问的
      */
-    private static final List<String> SAFE_URL_LIST = Arrays.asList("/userInfo/login", "/userInfo/register");
+    private static final List<String> SAFE_URL_LIST = Arrays.asList("*/user/login", "*/user/register");
 
 
 
@@ -47,7 +44,9 @@ public class JwtFilter implements Filter
         response.setCharacterEncoding("UTF-8");
         String url = request.getRequestURI().substring(request.getContextPath().length());
         // 登录和注册等请求不需要令牌
-        if (SAFE_URL_LIST.contains(url)) {
+        if (url.contains("login") || url.contains("/user/insert") || url.contains("/files/view") || url.contains("/files/image2")) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            chain.doFilter(request, response);
             return;
         }
 
@@ -65,6 +64,7 @@ public class JwtFilter implements Filter
                 return;
             }
 
+            // 校验token是否合法，如果合法则去除其中的信息放到request中
             Map<String, Claim> userData = JwtUtil.verifyToken(token);
             if (CollectionUtils.isEmpty(userData)) {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

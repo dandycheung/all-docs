@@ -2,6 +2,7 @@ package com.jiaruiblog.service;
 
 import com.jiaruiblog.auth.PermissionEnum;
 import com.jiaruiblog.entity.User;
+import com.jiaruiblog.entity.bo.UserBO;
 import com.jiaruiblog.entity.dto.BasePageDTO;
 import com.jiaruiblog.entity.dto.RegistryUserDTO;
 import com.jiaruiblog.entity.dto.UserRoleDTO;
@@ -43,6 +44,8 @@ public interface IUserService {
     BaseApiResult blockUser(String userId);
 
     User queryById(String userId);
+
+    User queryByUsername(String username);
 
     boolean checkPermissionForUser(User user, PermissionEnum[] permissionEnums);
 
@@ -87,5 +90,26 @@ public interface IUserService {
      * @return com.jiaruiblog.util.BaseApiResult
      **/
     BaseApiResult resetUserPwd(String userId, String adminId);
+
+
+    boolean isExist(String userId);
+
+    /**
+     * @Author luojiarui
+     * @Description 用户自行对自己的信息进行修改
+     * @Date 17:49 2024/7/23
+     * @Param [userBO] 传入的参数已经是经过校验的了
+     * @return boolean 更新个人信息结果
+     **/
+    boolean updateUserBySelf(UserBO userBO);
+    
+    /**
+     * @Author luojiarui
+     * @Description 管理员对某个用户的信息进行修改
+     * @Date 23:34 2024/7/26
+     * @Param [userBO]
+     * @return boolean
+     **/
+    boolean updateUserByAdmin(UserBO userBO);
 
 }
